@@ -1,0 +1,7 @@
+# Dépendances GuardiaBox
+cryptography>=42.0.0
+PyQt6>=6.7.0
+pytest>=8.0.0
+
+# Packaging (facultatif — génération de l'exécutable)
+pyinstaller>=6.0.0

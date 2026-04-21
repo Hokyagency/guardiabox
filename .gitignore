@@ -1,0 +1,39 @@
+# Fichiers sensibles de test (mots de passe, données personnelles)
+mdp_phase_test.txt
+dossier__test_chiffrement/
+
+# Environnement virtuel Python
+.venv/
+venv/
+env/
+
+# Bytecode Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Fichiers chiffrés / déchiffrés générés par l'application
+*.crypt
+*.decrypt
+
+# Fichiers de build PyInstaller
+build/
+dist/
+*.spec
+
+# Base de données SQLite (si ajoutée en version étendue)
+*.db
+*.sqlite
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Couverture de tests
+.coverage
+htmlcov/
+.pytest_cache/
