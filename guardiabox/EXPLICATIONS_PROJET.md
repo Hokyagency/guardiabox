@@ -267,6 +267,17 @@ MainWindow (QMainWindow)
 | **Barre de statut** | Affiche le résultat de chaque opération avec un code couleur. |
 | **Mode console conservé** | `python main.py --console` lance toujours l'interface texte. |
 
+### Améliorations UX v2.1
+
+| Fonctionnalité | Implémentation |
+|---|---|
+| **Fade-in + Slide-up** | À l'ouverture, `QPropertyAnimation` sur `windowOpacity` (0→1) et `geometry` (+30px→0) jouées en parallèle sur 400 ms avec easing `OutCubic`. |
+| **Toast slide-down** | Classe `ToastNotification(QWidget)` : apparaît sous l'en-tête avec `QPropertyAnimation` sur `geometry` (280 ms `OutCubic`), se referme après 3 s (220 ms `InCubic`). |
+| **Pulsation du bouton** | Classe `PulseButton(QPushButton)` : quand tous les champs requis sont remplis, un `QTimer` à 700 ms alterne la couleur de bordure pour signaler que le formulaire est prêt. |
+| **Tooltips ⓘ** | Labels `QLabel("ⓘ")` placés à côté des termes techniques (AES-256-GCM, PBKDF2-SHA256, mot de passe). Le survol affiche un `QToolTip` pédagogique multi-lignes. |
+| **Drop-shadow** | `QGraphicsDropShadowEffect` appliqué au `QTabWidget` (rayon 24 px) et aux boutons d'action (rayon 16 px). |
+| **QSS enrichi** | `border-radius: 7–10px` sur inputs et boutons, classe CSS `#action_ready` pour les boutons prêts, classe `#toast` pour la bannière verte. |
+
 ### Sécurité GUI
 
 - Le mot de passe n'est jamais affiché dans les logs ou la barre de statut.
