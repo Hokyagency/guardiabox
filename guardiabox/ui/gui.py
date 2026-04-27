@@ -1,5 +1,5 @@
 """
-Module gui — Interface graphique PyQt6 pour GuardiaBox (v2.1).
+Module gui — Interface graphique PyQt6 pour GuardiaBox (v2.2).
 
 Améliorations UX v2.1 :
 - Fade-in + slide-up à l'ouverture (QPropertyAnimation sur windowOpacity / geometry).
@@ -12,6 +12,8 @@ Améliorations UX v2.1 :
 
 from __future__ import annotations
 
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -53,17 +55,17 @@ from fileio.file_handler import (
     read_file_bytes,
     validate_path,
     write_file_bytes,
-    write_text_file,
 )
 from security.crypto import decrypt_data, encrypt_data
 from security.password import check_password_strength
+from storage.history import record_operation, sha256_of
 
 # ---------------------------------------------------------------------------
 # Constantes d'interface
 # ---------------------------------------------------------------------------
 
 APP_TITLE = "GuardiaBox — Coffre-Fort Numérique"
-APP_VERSION = "2.1"
+APP_VERSION = "2.2"
 ENCRYPTED_EXT = ".crypt"
 DECRYPTED_EXT = ".decrypt"
 
@@ -276,18 +278,95 @@ QStatusBar {{
 }}
 
 /* ── Toast notification ── */
-QWidget#toast {{
+QWidget#toast_success {{
     background-color: {C_TOAST_BG};
     border: 1px solid {C_SUCCESS};
     border-radius: 8px;
     padding: 4px;
 }}
 
-QLabel#toast_label {{
+QWidget#toast_error {{
+    background-color: #3a1e1e;
+    border: 1px solid {C_ERROR};
+    border-radius: 8px;
+    padding: 4px;
+}}
+
+QLabel#toast_label_success {{
     color: {C_SUCCESS};
     font-size: 13px;
     font-weight: 600;
     padding: 8px 16px;
+}}
+
+QLabel#toast_label_error {{
+    color: {C_ERROR};
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px 16px;
+}}
+
+/* ── Bouton Terminal Expert ── */
+QPushButton#terminal_btn {{
+    background-color: transparent;
+    color: {C_TEXT_MUTED};
+    border: 1px solid {C_BORDER};
+    border-radius: 6px;
+    padding: 5px 12px;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 12px;
+    font-weight: 600;
+}}
+
+QPushButton#terminal_btn:hover {{
+    background-color: {C_PANEL};
+    color: {C_ACCENT};
+    border-color: {C_ACCENT};
+}}
+
+QPushButton#terminal_btn:pressed {{
+    background-color: {C_INPUT_BG};
+}}
+
+/* ── Bouton Infos Terminal ── */
+QPushButton#info_terminal_btn {{
+    background-color: transparent;
+    color: {C_TEXT_MUTED};
+    border: 1px solid {C_BORDER};
+    border-radius: 6px;
+    padding: 5px 12px;
+    font-size: 12px;
+}}
+
+QPushButton#info_terminal_btn:hover {{
+    background-color: {C_PANEL};
+    color: {C_ACCENT};
+    border-color: {C_ACCENT};
+}}
+
+QPushButton#info_terminal_btn:pressed {{
+    background-color: {C_INPUT_BG};
+}}
+
+/* ── Bouton Ouvrir le dossier ── */
+QPushButton#open_folder_btn {{
+    background-color: {C_PANEL};
+    color: {C_SUCCESS};
+    border: 1px solid {C_SUCCESS};
+    border-radius: 7px;
+    min-width: 160px;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 600;
+}}
+
+QPushButton#open_folder_btn:hover {{
+    background-color: {C_SUCCESS};
+    color: #ffffff;
+}}
+
+QPushButton#open_folder_btn:pressed {{
+    background-color: #3a8a62;
 }}
 
 /* ── Message boxes ── */
@@ -395,6 +474,20 @@ def _info_icon(tooltip_text: str) -> QLabel:
     return lbl
 
 
+def _open_file_location(path: str) -> None:
+    """Ouvre dans l'explorateur le dossier contenant le fichier *path*."""
+    folder = str(Path(path).parent)
+    try:
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", f"/select,{path}"])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", path])
+        else:
+            subprocess.Popen(["xdg-open", folder])
+    except Exception:
+        pass
+
+
 def _add_drop_shadow(widget: QWidget, radius: int = 18, opacity: float = 0.35) -> None:
     """Ajoute un effet de drop-shadow à un widget.
 
@@ -490,15 +583,69 @@ def _password_strength_color(password: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Widget glisser-déposer de fichier
+# ---------------------------------------------------------------------------
+
+class DropLineEdit(QLineEdit):
+    """QLineEdit qui accepte le glisser-déposer d'un fichier unique.
+
+    Args:
+        placeholder: Texte indicatif dans le champ.
+        accept_ext:  Extension autorisée (ex. ``.crypt``). ``None`` = tous.
+    """
+
+    def __init__(
+        self,
+        placeholder: str = "",
+        accept_ext: str | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setPlaceholderText(placeholder)
+        self._accept_ext = accept_ext.lower() if accept_ext else None
+        self.setAcceptDrops(True)
+
+    def _is_accepted(self, path: str) -> bool:
+        return self._accept_ext is None or path.lower().endswith(self._accept_ext)
+
+    def dragEnterEvent(self, event) -> None:  # type: ignore[override]
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            if urls and self._is_accepted(urls[0].toLocalFile()):
+                self.setStyleSheet(
+                    f"QLineEdit {{ border: 2px dashed {C_ACCENT_GLOW}; "
+                    f"background-color: #1a2a35; }}"
+                )
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:  # type: ignore[override]
+        self.setStyleSheet("")
+
+    def dropEvent(self, event) -> None:  # type: ignore[override]
+        self.setStyleSheet("")
+        urls = event.mimeData().urls()
+        if urls:
+            path = urls[0].toLocalFile()
+            if self._is_accepted(path):
+                self.setText(path)
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+
+# ---------------------------------------------------------------------------
 # Toast notification (slide-down)
 # ---------------------------------------------------------------------------
 
 class ToastNotification(QWidget):
-    """Bannière de succès qui apparaît en slide-down depuis le haut de la fenêtre.
+    """Bannière de notification slide-down (succès ou erreur).
 
     Args:
-        parent: Fenêtre parente (nécessaire pour le positionnement).
+        parent: Widget parent (nécessaire pour le positionnement).
         message: Texte à afficher.
+        kind: ``'success'`` (fond vert) ou ``'error'`` (fond rouge).
         duration_ms: Durée d'affichage avant disparition automatique.
     """
 
@@ -506,17 +653,19 @@ class ToastNotification(QWidget):
         self,
         parent: QWidget,
         message: str,
+        kind: str = "success",
         duration_ms: int = 3000,
     ) -> None:
         super().__init__(parent)
-        self.setObjectName("toast")
+        self.setObjectName(f"toast_{kind}")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        lbl = QLabel(f"✓  {message}")
-        lbl.setObjectName("toast_label")
+        icon = "✓" if kind == "success" else "✗"
+        lbl = QLabel(f"{icon}  {message}")
+        lbl.setObjectName(f"toast_label_{kind}")
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl)
 
@@ -617,11 +766,15 @@ class EncryptTab(QWidget):
     """Onglet dédié au chiffrement de fichier ou de message."""
 
     status_message = pyqtSignal(str, str)   # (message, niveau: info|ok|error)
-    request_toast = pyqtSignal(str)          # message à afficher en toast
+    request_toast = pyqtSignal(str, str)     # (message, kind: success|error)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._worker: EncryptWorker | None = None
+        self._last_output_path: str = ""
+        self._pending_src: str = ""
+        self._pending_dest: str = ""
+        self._pending_hash: str = ""
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -648,11 +801,21 @@ class EncryptTab(QWidget):
         root.addWidget(self._message_edit)
 
         # Fichier source
-        self._source_path, browse_src = _make_file_row(
-            "Chemin du fichier à chiffrer",
-            "Sélectionner un fichier à chiffrer",
-            "Tous les fichiers (*.*)",
+        self._source_path = DropLineEdit(
+            "Chemin du fichier à chiffrer (ou glissez-déposez un fichier ici)",
         )
+        browse_src = QPushButton("Parcourir")
+        browse_src.setObjectName("browse_btn")
+        browse_src.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+
+        def _open_src_dialog() -> None:
+            path, _ = QFileDialog.getOpenFileName(
+                None, "Sélectionner un fichier à chiffrer", "", "Tous les fichiers (*.*)"
+            )
+            if path:
+                self._source_path.setText(path)
+
+        browse_src.clicked.connect(_open_src_dialog)
         file_row = QHBoxLayout()
         file_row.addWidget(self._source_path)
         file_row.addWidget(browse_src)
@@ -715,10 +878,20 @@ class EncryptTab(QWidget):
 
         # --- Bouton action (PulseButton) ---
         root.addStretch()
+        action_row = QHBoxLayout()
         self._encrypt_btn = PulseButton("  Chiffrer le fichier")
         self._encrypt_btn.setMinimumHeight(42)
         _add_drop_shadow(self._encrypt_btn, radius=16, opacity=0.4)
-        root.addWidget(self._encrypt_btn)
+        action_row.addWidget(self._encrypt_btn)
+
+        self._open_folder_btn = QPushButton("📂  Ouvrir le dossier")
+        self._open_folder_btn.setObjectName("open_folder_btn")
+        self._open_folder_btn.setMinimumHeight(42)
+        self._open_folder_btn.setMaximumWidth(190)
+        self._open_folder_btn.setVisible(False)
+        self._open_folder_btn.clicked.connect(self._open_last_folder)
+        action_row.addWidget(self._open_folder_btn)
+        root.addLayout(action_row)
 
         # --- Connexions ---
         self._radio_message.toggled.connect(self._on_source_toggle)
@@ -841,7 +1014,13 @@ class EncryptTab(QWidget):
             self._show_error(f"Chemin de destination invalide : {exc}")
             return
 
+        # Capture des métadonnées pour l'historique
+        self._pending_src = "(message direct)" if self._radio_message.isChecked() else src
+        self._pending_dest = final_dest
+        self._pending_hash = sha256_of(data)
+
         self._set_busy(True)
+        self._open_folder_btn.setVisible(False)
         self.status_message.emit("Chiffrement en cours…", "info")
 
         self._worker = EncryptWorker(data, password, final_dest, self)
@@ -853,12 +1032,44 @@ class EncryptTab(QWidget):
         self._set_busy(False)
         self._encrypt_btn.stop_pulse()
         self.status_message.emit(f"Fichier chiffré : {output_path}", "ok")
-        self.request_toast.emit(f"Fichier chiffré avec succès !")
+
+        src = getattr(self, "_pending_src", "")
+        record_operation(
+            "CHIFFREMENT",
+            src or "?",
+            output_path,
+            getattr(self, "_pending_hash", ""),
+            "SUCCES",
+        )
+
+        # Supprimer le fichier source pour ne laisser que le .crypt
+        if src and src != "(message direct)":
+            try:
+                Path(src).unlink()
+            except Exception:
+                pass  # Suppression optionnelle — on ne bloque pas si échec
+
+        self._last_output_path = output_path
+        self._open_folder_btn.setVisible(True)
+        self.request_toast.emit("Fichier chiffré avec succès !", "success")
+
+    def _open_last_folder(self) -> None:
+        if self._last_output_path:
+            _open_file_location(self._last_output_path)
 
     def _on_encrypt_error(self, message: str) -> None:
         self._set_busy(False)
         self.status_message.emit(f"Erreur : {message}", "error")
-        self._show_error(message)
+        record_operation(
+            "CHIFFREMENT",
+            getattr(self, "_pending_src", "?"),
+            getattr(self, "_pending_dest", "?"),
+            getattr(self, "_pending_hash", ""),
+            "ERREUR",
+            message,
+        )
+        self.request_toast.emit(message, "error")
+        # _show_error délègue au toast, pas d'appel supplémentaire
 
     def _set_busy(self, busy: bool) -> None:
         self._encrypt_btn.setEnabled(not busy)
@@ -867,7 +1078,7 @@ class EncryptTab(QWidget):
         )
 
     def _show_error(self, message: str) -> None:
-        QMessageBox.critical(self, "Erreur", message)
+        self.request_toast.emit(message, "error")
 
 
 # ---------------------------------------------------------------------------
@@ -878,11 +1089,15 @@ class DecryptTab(QWidget):
     """Onglet dédié au déchiffrement d'un fichier .crypt."""
 
     status_message = pyqtSignal(str, str)
-    request_toast = pyqtSignal(str)
+    request_toast = pyqtSignal(str, str)  # (message, kind)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._worker: DecryptWorker | None = None
+        self._last_output_path: str = ""
+        self._pending_src: str = ""
+        self._pending_dest: str = ""
+        self._pending_hash: str = ""
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -903,11 +1118,23 @@ class DecryptTab(QWidget):
         algo_row.addStretch()
         root.addLayout(algo_row)
 
-        self._src_path, browse_src = _make_file_row(
-            "Chemin du fichier .crypt",
-            "Sélectionner un fichier chiffré",
-            f"Fichiers chiffrés (*{ENCRYPTED_EXT});;Tous (*.*)",
+        self._src_path = DropLineEdit(
+            "Chemin du fichier .crypt (ou glissez-déposez un fichier ici)",
+            accept_ext=ENCRYPTED_EXT,
         )
+        browse_src = QPushButton("Parcourir")
+        browse_src.setObjectName("browse_btn")
+        browse_src.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+
+        def _open_src_dialog() -> None:
+            path, _ = QFileDialog.getOpenFileName(
+                None, "Sélectionner un fichier chiffré", "",
+                f"Fichiers chiffrés (*{ENCRYPTED_EXT});;Tous (*.*)"
+            )
+            if path:
+                self._src_path.setText(path)
+
+        browse_src.clicked.connect(_open_src_dialog)
         src_row = QHBoxLayout()
         src_row.addWidget(self._src_path)
         src_row.addWidget(browse_src)
@@ -959,10 +1186,20 @@ class DecryptTab(QWidget):
 
         # --- Bouton ---
         root.addStretch()
+        action_row = QHBoxLayout()
         self._decrypt_btn = PulseButton("  Déchiffrer le fichier")
         self._decrypt_btn.setMinimumHeight(42)
         _add_drop_shadow(self._decrypt_btn, radius=16, opacity=0.4)
-        root.addWidget(self._decrypt_btn)
+        action_row.addWidget(self._decrypt_btn)
+
+        self._open_folder_btn = QPushButton("📂  Ouvrir le dossier")
+        self._open_folder_btn.setObjectName("open_folder_btn")
+        self._open_folder_btn.setMinimumHeight(42)
+        self._open_folder_btn.setMaximumWidth(190)
+        self._open_folder_btn.setVisible(False)
+        self._open_folder_btn.clicked.connect(self._open_last_folder)
+        action_row.addWidget(self._open_folder_btn)
+        root.addLayout(action_row)
 
         # --- Connexions ---
         self._src_path.textChanged.connect(self._auto_fill_dest)
@@ -1015,7 +1252,13 @@ class DecryptTab(QWidget):
             self._show_error(f"Chemin de destination invalide : {exc}")
             return
 
+        # Capture des métadonnées pour l'historique
+        self._pending_src = src
+        self._pending_dest = dest
+        self._pending_hash = sha256_of(encrypted_data)
+
         self._set_busy(True)
+        self._open_folder_btn.setVisible(False)
         self._result_edit.clear()
         self.status_message.emit("Déchiffrement en cours…", "info")
 
@@ -1037,12 +1280,33 @@ class DecryptTab(QWidget):
                 f"(Contenu binaire — non affichable. Fichier sauvegardé : {output_path})"
             )
 
-        self.request_toast.emit("Fichier déchiffré avec succès !")
+        self.request_toast.emit("Fichier déchiffré avec succès !", "success")
+        self._last_output_path = output_path
+        self._open_folder_btn.setVisible(True)
+        record_operation(
+            "DECHIFFREMENT",
+            getattr(self, "_pending_src", "?"),
+            output_path,
+            getattr(self, "_pending_hash", ""),
+            "SUCCES",
+        )
+
+    def _open_last_folder(self) -> None:
+        if self._last_output_path:
+            _open_file_location(self._last_output_path)
 
     def _on_decrypt_error(self, message: str) -> None:
         self._set_busy(False)
         self.status_message.emit(f"Erreur : {message}", "error")
-        self._show_error(message)
+        record_operation(
+            "DECHIFFREMENT",
+            getattr(self, "_pending_src", "?"),
+            getattr(self, "_pending_dest", "?"),
+            getattr(self, "_pending_hash", ""),
+            "ERREUR",
+            message,
+        )
+        self.request_toast.emit(message, "error")
 
     def _set_busy(self, busy: bool) -> None:
         self._decrypt_btn.setEnabled(not busy)
@@ -1051,7 +1315,94 @@ class DecryptTab(QWidget):
         )
 
     def _show_error(self, message: str) -> None:
-        QMessageBox.critical(self, "Erreur", message)
+        self.request_toast.emit(message, "error")
+
+
+# ---------------------------------------------------------------------------
+# Dialogue Infos Terminal
+# ---------------------------------------------------------------------------
+
+class TerminalTab(QWidget):
+    """Onglet affichant les commandes utiles à copier-coller dans le terminal."""
+
+    COMMANDS = [
+        ("Mode console",          "python main.py --console"),
+        ("Lancer les tests",      "pytest tests/ -v"),
+        ("Historique SQLite",     'python -c "from storage.history import get_history; [print(r) for r in get_history(10)]"'),
+        ("Installer dépendances", "pip install -r requirements.txt"),
+        ("Git status",            "git status"),
+        ("Git log",               "git log --oneline -10"),
+        ("Git push",              "git push origin Gab"),
+    ]
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(6)
+        layout.setContentsMargins(24, 20, 24, 20)
+
+        title = QLabel("Commandes à utiliser dans le terminal")
+        title.setStyleSheet("font-size: 14px; font-weight: bold; color: #00b4d8; padding-bottom: 6px;")
+        layout.addWidget(title)
+
+        hint = QLabel("Ouvrez d'abord le terminal (bouton >_ Terminal), puis collez la commande souhaitée.")
+        hint.setStyleSheet("color: #7a8694; font-size: 12px; padding-bottom: 10px;")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        for description, command in self.COMMANDS:
+            row = QWidget()
+            row.setStyleSheet("background: #22262e; border-radius: 6px;")
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(10, 8, 10, 8)
+            row_layout.setSpacing(10)
+
+            desc_lbl = QLabel(description)
+            desc_lbl.setFixedWidth(155)
+            desc_lbl.setStyleSheet("color: #a0aab4; font-size: 12px; background: transparent;")
+
+            cmd_lbl = QLabel(command)
+            cmd_lbl.setStyleSheet(
+                "font-family: Consolas, monospace; font-size: 12px; "
+                "color: #c9d1d9; background: #12151a; "
+                "padding: 4px 8px; border-radius: 4px; border: 1px solid #2d3240;"
+            )
+            cmd_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            cmd_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+            copy_btn = QPushButton("Copier")
+            copy_btn.setFixedSize(72, 28)
+            copy_btn.setStyleSheet(
+                "QPushButton { background: #00b4d8; color: #fff; border-radius: 5px; font-size: 12px; border: none; }"
+                "QPushButton:hover { background: #0096b5; }"
+                "QPushButton:pressed { background: #007a96; }"
+            )
+            copy_btn.clicked.connect(
+                lambda _checked, cmd=command, btn=copy_btn: self._copy(cmd, btn)
+            )
+
+            row_layout.addWidget(desc_lbl)
+            row_layout.addWidget(cmd_lbl)
+            row_layout.addWidget(copy_btn)
+            layout.addWidget(row)
+
+        layout.addStretch()
+
+    def _copy(self, command: str, btn: QPushButton) -> None:
+        QApplication.clipboard().setText(command)
+        btn.setText("✓ Copié !")
+        btn.setStyleSheet(
+            "QPushButton { background: #52b788; color: #fff; border-radius: 5px; font-size: 12px; border: none; }"
+        )
+        QTimer.singleShot(1500, lambda: (
+            btn.setText("Copier"),
+            btn.setStyleSheet(
+                "QPushButton { background: #00b4d8; color: #fff; border-radius: 5px; font-size: 12px; border: none; }"
+                "QPushButton:hover { background: #0096b5; }"
+                "QPushButton:pressed { background: #007a96; }"
+            )
+        ))
 
 
 # ---------------------------------------------------------------------------
@@ -1130,6 +1481,18 @@ class MainWindow(QMainWindow):
         algo_badge_layout.addWidget(pbkdf2_info)
         header_layout.addWidget(algo_badge)
 
+        # Bouton Terminal Expert
+        terminal_btn = QPushButton(">_  Terminal")
+        terminal_btn.setObjectName("terminal_btn")
+        terminal_btn.setToolTip(
+            "Ouvre un terminal système dans le répertoire du projet.\n"
+            "Utile pour exécuter des scripts Python, des commandes Git, etc."
+        )
+        terminal_btn.setFixedHeight(32)
+        terminal_btn.clicked.connect(self._open_terminal)
+        header_layout.addSpacing(12)
+        header_layout.addWidget(terminal_btn)
+
         layout.addWidget(header)
 
         # --- Onglets ---
@@ -1140,9 +1503,11 @@ class MainWindow(QMainWindow):
 
         self._encrypt_tab = EncryptTab()
         self._decrypt_tab = DecryptTab()
+        self._terminal_tab = TerminalTab()
 
         self._tabs.addTab(self._encrypt_tab, "🔒  Chiffrer")
         self._tabs.addTab(self._decrypt_tab, "🔓  Déchiffrer")
+        self._tabs.addTab(self._terminal_tab, ">_  Terminal")
 
         layout.addWidget(self._tabs)
 
@@ -1156,6 +1521,57 @@ class MainWindow(QMainWindow):
         self._decrypt_tab.status_message.connect(self._update_status)
         self._encrypt_tab.request_toast.connect(self._show_toast)
         self._decrypt_tab.request_toast.connect(self._show_toast)
+
+    # --- Terminal Expert ---
+
+    def _open_terminal(self) -> None:
+        """Ouvre un terminal dans le répertoire source guardiabox/ et lance le mode console."""
+        if getattr(sys, "frozen", False):
+            # Exe = dist/GuardiaBox/GuardiaBox.exe → remonter 3 niveaux pour atteindre guardiabox/
+            project_dir = str(Path(sys.executable).parent.parent.parent)
+            # Venv python : app/.venv/Scripts/python.exe
+            venv_python = (
+                Path(sys.executable).parent.parent.parent.parent
+                / ".venv" / "Scripts" / "python.exe"
+            )
+            python_cmd = f'"{venv_python}"' if venv_python.exists() else "python"
+        else:
+            project_dir = str(Path(__file__).parent.parent)
+            # sys.executable est déjà le python du venv qui a lancé l'app
+            python_cmd = f'"{sys.executable}"'
+
+        pip_cmd = f"{python_cmd} -m pip install -r requirements.txt"
+        console_cmd = f"{python_cmd} main.py --console"
+
+        try:
+            if sys.platform == "win32":
+                full_cmd = f'{pip_cmd} && {console_cmd}'
+                subprocess.Popen(
+                    ["cmd.exe", "/K", full_cmd],
+                    creationflags=subprocess.CREATE_NEW_CONSOLE,
+                    cwd=project_dir,
+                )
+            elif sys.platform == "darwin":
+                mac_script = f"cd {shlex.quote(project_dir)} && {pip_cmd} && {console_cmd}"
+                script = f'tell application "Terminal" to do script {shlex.quote(mac_script)}'
+                subprocess.Popen(["osascript", "-e", script])
+            else:
+                run_part = f"{pip_cmd} && {console_cmd}; exec bash"
+                for emulator in ("x-terminal-emulator", "gnome-terminal", "xterm"):
+                    try:
+                        if emulator == "gnome-terminal":
+                            subprocess.Popen(
+                                [emulator, f"--working-directory={project_dir}",
+                                 "--", "bash", "-c", run_part]
+                            )
+                        else:
+                            subprocess.Popen([emulator, "-e", "bash", "-c", run_part],
+                                             cwd=project_dir)
+                        break
+                    except FileNotFoundError:
+                        continue
+        except Exception as exc:
+            self._show_toast(f"Impossible d'ouvrir le terminal : {exc}", "error")
 
     # --- Animations ---
 
@@ -1187,9 +1603,9 @@ class MainWindow(QMainWindow):
 
     # --- Toast ---
 
-    def _show_toast(self, message: str) -> None:
-        """Affiche une notification slide-down de succès."""
-        ToastNotification(self.centralWidget(), message)
+    def _show_toast(self, message: str, kind: str = "success") -> None:
+        """Affiche une notification slide-down (succès ou erreur)."""
+        ToastNotification(self.centralWidget(), message, kind)
 
     # --- Status bar ---
 

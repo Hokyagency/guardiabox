@@ -5,7 +5,11 @@ Couvre :
 - security.crypto  : chiffrement / déchiffrement AES-GCM.
 - security.password: validation de la robustesse des mots de passe.
 - fileio.file_handler: validation des chemins de fichiers.
+- storage.history  : historique SQLite des opérations.
 """
+
+import tempfile
+from pathlib import Path
 
 import pytest
 from cryptography.exceptions import InvalidTag
@@ -20,6 +24,7 @@ from security.crypto import (
 )
 from security.password import calculate_entropy, check_password_strength
 from fileio.file_handler import validate_path
+from storage.history import get_history, init_db, record_operation, sha256_of
 
 
 # ===========================================================================
@@ -217,3 +222,82 @@ class TestFileHandler:
         """Un simple nom de fichier sans répertoire doit être accepté."""
         path = validate_path("document.txt")
         assert str(path) == "document.txt"
+
+
+# ===========================================================================
+# Tests — storage.history
+# ===========================================================================
+
+class TestHistory:
+    """Tests du module d'historique SQLite."""
+
+    @pytest.fixture
+    def db(self, tmp_path: Path) -> Path:
+        """Fournit un chemin de base de données temporaire et isolé."""
+        return tmp_path / "test_history.db"
+
+    def test_init_creates_table(self, db: Path) -> None:
+        """init_db doit créer la table operations sans erreur."""
+        init_db(db)
+        assert db.exists()
+
+    def test_record_and_retrieve(self, db: Path) -> None:
+        """record_operation doit persister une entrée récupérable via get_history."""
+        record_operation(
+            "CHIFFREMENT", "/src/fichier.txt", "/dest/fichier.crypt",
+            "abc123", "SUCCES", db_path=db,
+        )
+        history = get_history(db_path=db)
+        assert len(history) == 1
+        entry = history[0]
+        assert entry["operation"] == "CHIFFREMENT"
+        assert entry["source_path"] == "/src/fichier.txt"
+        assert entry["output_path"] == "/dest/fichier.crypt"
+        assert entry["file_sha256"] == "abc123"
+        assert entry["status"] == "SUCCES"
+        assert entry["error_msg"] == ""
+
+    def test_record_error_stores_message(self, db: Path) -> None:
+        """Une opération en erreur doit conserver le message d'erreur."""
+        record_operation(
+            "DECHIFFREMENT", "/src/fichier.crypt", "/dest/fichier.txt",
+            "def456", "ERREUR", "Mot de passe incorrect", db_path=db,
+        )
+        history = get_history(db_path=db)
+        assert history[0]["status"] == "ERREUR"
+        assert history[0]["error_msg"] == "Mot de passe incorrect"
+
+    def test_get_history_order(self, db: Path) -> None:
+        """get_history doit retourner les entrées en ordre anti-chronologique."""
+        for i in range(3):
+            record_operation(
+                "CHIFFREMENT", f"/src/{i}.txt", f"/dest/{i}.crypt",
+                f"hash{i}", "SUCCES", db_path=db,
+            )
+        history = get_history(db_path=db)
+        ids = [entry["id"] for entry in history]
+        assert ids == sorted(ids, reverse=True)
+
+    def test_get_history_limit(self, db: Path) -> None:
+        """get_history doit respecter le paramètre limit."""
+        for i in range(10):
+            record_operation(
+                "CHIFFREMENT", f"/src/{i}.txt", f"/dest/{i}.crypt",
+                f"hash{i}", "SUCCES", db_path=db,
+            )
+        history = get_history(limit=3, db_path=db)
+        assert len(history) == 3
+
+    def test_sha256_of_known_value(self) -> None:
+        """sha256_of doit produire l'empreinte SHA-256 connue de b''."""
+        expected = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        assert sha256_of(b"") == expected
+
+    def test_sha256_of_deterministic(self) -> None:
+        """sha256_of doit retourner la même empreinte pour les mêmes données."""
+        data = b"GuardiaBox test data"
+        assert sha256_of(data) == sha256_of(data)
+
+    def test_sha256_of_length(self) -> None:
+        """sha256_of doit toujours retourner une chaîne de 64 caractères hex."""
+        assert len(sha256_of(b"any data")) == 64

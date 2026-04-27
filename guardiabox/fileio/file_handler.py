@@ -6,6 +6,7 @@ afin de prévenir les attaques de type Path Traversal.
 """
 
 import os
+import sys
 from pathlib import Path
 
 
@@ -78,8 +79,14 @@ def write_file_bytes(file_path: str, data: bytes) -> None:
     path = validate_path(file_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(path, "wb") as file_obj:
-        file_obj.write(data)
+    if sys.platform != "win32":
+        old_mask = os.umask(0o077)
+    try:
+        with open(path, "wb") as file_obj:
+            file_obj.write(data)
+    finally:
+        if sys.platform != "win32":
+            os.umask(old_mask)
 
 
 def write_text_file(file_path: str, content: str) -> None:
@@ -97,5 +104,11 @@ def write_text_file(file_path: str, content: str) -> None:
     path = validate_path(file_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(path, "w", encoding="utf-8") as file_obj:
-        file_obj.write(content)
+    if sys.platform != "win32":
+        old_mask = os.umask(0o077)
+    try:
+        with open(path, "w", encoding="utf-8") as file_obj:
+            file_obj.write(content)
+    finally:
+        if sys.platform != "win32":
+            os.umask(old_mask)

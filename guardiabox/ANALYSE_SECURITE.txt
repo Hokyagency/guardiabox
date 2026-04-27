@@ -1,0 +1,237 @@
+============================================================
+  ANALYSE DE SÉCURITÉ — GuardiaBox v2.2
+  Réponses techniques détaillées
+============================================================
+
+------------------------------------------------------------
+1. ALGORITHME ET MODE DE CHIFFREMENT
+------------------------------------------------------------
+
+Q : Utilises-tu un algorithme standard ou une implémentation maison ?
+R : Algorithme entièrement standard. GuardiaBox utilise la bibliothèque
+    Python `cryptography` (PyCA), qui est une implémentation éprouvée et
+    auditée régulièrement. Aucun code cryptographique "maison" n'existe
+    dans le projet — toute la logique de chiffrement délègue à cette
+    bibliothèque.
+
+Q : Quel mode d'opération AES ?
+R : AES-256 en mode GCM (Galois/Counter Mode), via la classe AESGCM de
+    cryptography.hazmat.primitives.ciphers.aead.
+    - Taille de clé : 256 bits (32 octets)
+    - Taille du nonce : 96 bits (12 octets) — taille recommandée par le NIST
+    - Taille du tag d'authentification : 128 bits (16 octets)
+
+Q : Chiffrement authentifié ou chiffrement "nu" ?
+R : Chiffrement authentifié (AEAD — Authenticated Encryption with
+    Associated Data). AES-GCM garantit simultanément :
+    - La confidentialité : le contenu est chiffré.
+    - L'intégrité : le tag GCM de 128 bits détecte toute modification
+      du fichier chiffré (bit-flipping, corruption, altération).
+    - L'authenticité : un mauvais mot de passe ou une donnée corrompue
+      lève cryptography.exceptions.InvalidTag, sans révéler d'information
+      exploitable sur la cause exacte.
+    Il n'y a pas de données associées (AAD) passées à encrypt() — le
+    paramètre est None — donc seul le ciphertext est authentifié, pas
+    de métadonnées externes.
+
+------------------------------------------------------------
+2. GESTION DES CLÉS
+------------------------------------------------------------
+
+Q : Comment la clé de chiffrement est-elle générée ?
+R : La clé n'est jamais saisie directement. Elle est dérivée à la volée
+    depuis le mot de passe de l'utilisateur via PBKDF2-HMAC-SHA256.
+    Chaque chiffrement génère un sel aléatoire (os.urandom(16)) qui est
+    stocké dans les 16 premiers octets du fichier .crypt. La clé n'existe
+    que le temps de l'opération.
+
+Q : Fonction de dérivation et paramètres ?
+R : PBKDF2-HMAC-SHA256 avec les paramètres suivants :
+    - Algorithme de hachage : SHA-256
+    - Nombre d'itérations  : 600 000
+      (le NIST SP 800-132 recommande ≥ 210 000 pour SHA-256 en 2023 ;
+       600 000 est au-dessus de cette recommandation)
+    - Taille du sel        : 16 octets (128 bits), généré par os.urandom()
+    - Taille de la sortie  : 32 octets (256 bits) = clé AES-256
+    Le sel est unique par opération de chiffrement, rendant les attaques
+    par table de correspondance (rainbow tables) inopérantes.
+
+    Note : Argon2 ou scrypt seraient plus résistants aux attaques matérielles
+    (GPU/ASIC) car ils sont memory-hard. PBKDF2 reste un choix correct mais
+    plus vulnérable à la parallélisation que les alternatives modernes.
+
+Q : La clé ou le mot de passe est-il stocké quelque part ?
+R : Non. Ni la clé dérivée ni le mot de passe ne sont jamais persistés
+    sur disque. En mémoire vive, le mot de passe est conservé le temps
+    de l'exécution du thread de chiffrement (EncryptWorker / DecryptWorker),
+    puis il n'y a aucun mécanisme qui le "pinne" ou le vide explicitement —
+    Python étant garbage-collecté, la durée de vie exacte en mémoire n'est
+    pas garantie. La clé dérivée (32 octets) suit le même cycle de vie.
+    Il n'y a aucun stockage dans un fichier, une base de données, ou le
+    registre Windows.
+
+Q : L'utilisateur doit-il fournir le mot de passe à chaque opération ?
+R : Oui, sans exception. Il n'y a aucun mécanisme de session, de cache,
+    de "remember me", ni de stockage de mot de passe. Chaque opération
+    de chiffrement ou déchiffrement requiert une nouvelle saisie dans le
+    champ dédié de l'interface (GUI ou console).
+
+------------------------------------------------------------
+3. ENVIRONNEMENT D'EXÉCUTION
+------------------------------------------------------------
+
+Q : Type d'application ?
+R : Application desktop locale (Windows / Linux / macOS).
+    Deux interfaces sont disponibles :
+    - GUI  : interface graphique PyQt6 (lancée par défaut)
+    - CLI  : interface console texte (python main.py --console)
+    L'application peut aussi être distribuée sous forme d'exécutable
+    autonome généré par PyInstaller (dist/GuardiaBox/GuardiaBox.exe).
+
+Q : Le chiffrement a-t-il lieu côté client ou serveur ?
+R : Entièrement côté client (local). Il n'y a aucun serveur, aucune API,
+    aucune communication réseau d'aucune sorte. L'application est
+    100 % offline. Les données ne quittent jamais la machine.
+
+Q : Est-ce une SPA / application web ?
+R : Non. Ce n'est pas une application web. Aucun navigateur n'est impliqué.
+    L'interface graphique utilise PyQt6, un framework de widgets natifs.
+
+------------------------------------------------------------
+4. DONNÉES MANIPULÉES
+------------------------------------------------------------
+
+Q : Que devient le message chiffré ?
+R : Il est écrit dans un fichier .crypt sur le système de fichiers local.
+    Le chemin de destination peut être choisi par l'utilisateur ou
+    calculé automatiquement (source + ".crypt").
+    Depuis la v2.2 : le fichier source est supprimé après chiffrement
+    réussi, de sorte que le clair et le chiffré ne coexistent jamais
+    dans le même répertoire.
+    Il n'y a pas de copie dans le presse-papiers ni d'envoi réseau.
+
+Q : Y a-t-il une limite de taille du message ?
+R : Aucune limite explicite dans le code. La taille est bornée par la
+    mémoire vive disponible (tout le contenu est lu en mémoire avec
+    read_file_bytes() avant chiffrement). Il n'y a pas de traitement
+    en streaming — les fichiers très volumineux (> quelques Go) pourraient
+    saturer la RAM. Pour un usage habituel (fichiers < quelques centaines
+    de Mo), ce n'est pas un problème pratique.
+
+------------------------------------------------------------
+5. FONCTIONNALITÉS ANNEXES
+------------------------------------------------------------
+
+Q : Fonction d'export/import ?
+R : Oui, c'est le cœur de l'application. Chaque chiffrement produit un
+    fichier .crypt exportable/déplaçable librement. Ce fichier est
+    auto-contenu : il embarque le sel et le nonce nécessaires au
+    déchiffrement. Le destinataire n'a besoin que du fichier .crypt
+    et du mot de passe pour déchiffrer, sans configuration préalable.
+
+Q : Gestion des métadonnées ? Sont-elles chiffrées ?
+R : Les métadonnées dans le fichier .crypt se limitent au sel (16 octets)
+    et au nonce (12 octets), qui sont en clair dans l'en-tête du fichier.
+    Ces données sont nécessaires au déchiffrement et ne révèlent rien
+    sur le contenu. Le nom du fichier source, la date, la taille originale
+    ne sont PAS stockés dans le .crypt — ils ne sont donc pas accessibles
+    à un attaquant qui n'aurait que le fichier chiffré.
+
+    En revanche, une base SQLite est maintenue dans ~/.guardiabox/history.db.
+    Elle enregistre pour chaque opération :
+    - Horodatage UTC
+    - Type d'opération (CHIFFREMENT / DECHIFFREMENT)
+    - Chemin du fichier source (ou "(message direct)")
+    - Chemin du fichier produit
+    - Empreinte SHA-256 du contenu source
+    - Statut (SUCCES / ERREUR) et message d'erreur éventuel
+
+    Ces métadonnées sont stockées EN CLAIR dans history.db. Un attaquant
+    ayant accès au profil utilisateur pourrait voir quels fichiers ont été
+    chiffrés, leurs chemins, et leurs empreintes SHA-256 (qui permettent
+    de vérifier si deux fichiers sont identiques). C'est le principal
+    point d'attention en matière de confidentialité des métadonnées.
+
+Q : Y a-t-il une journalisation (logs) ou une télémétrie ?
+R : La seule journalisation est la base SQLite history.db décrite ci-dessus.
+    Il n'y a aucune télémétrie, aucun envoi de données vers un serveur
+    externe, aucun fichier de log applicatif. Les erreurs sont affichées
+    à l'utilisateur via des toasts dans l'interface, mais ne sont pas
+    écrites sur disque (sauf dans history.db si l'opération a débuté).
+    Le contenu chiffré ou en clair n'apparaît jamais dans les logs.
+
+------------------------------------------------------------
+6. MENACES CIBLÉES
+------------------------------------------------------------
+
+Q : Attaque par canal auxiliaire (timing, mémoire, etc.) ?
+R : Partiellement. La bibliothèque cryptography (PyCA) implémente AES-GCM
+    via OpenSSL ou une implémentation constante en temps au niveau bas.
+    Cependant :
+    - La comparaison du tag GCM est effectuée par la bibliothèque (constante
+      en temps, pas de short-circuit en Python).
+    - La dérivation PBKDF2 avec 600 000 itérations est intentionnellement
+      lente, ce qui réduit l'efficacité des attaques par timing sur le mot
+      de passe.
+    - Aucune protection explicite contre les attaques par canal mémoire
+      (cold boot, swap) n'est mise en place. Python ne garantit pas
+      l'effacement sécurisé des variables sensibles en mémoire.
+    Conclusion : protection convenable pour un usage standard, insuffisante
+    pour un modèle de menace très avancé (attaquant avec accès physique
+    à la RAM en cours d'exécution).
+
+Q : Compromission de l'endpoint (malware, accès physique) ?
+R : L'application ne peut pas se défendre contre un endpoint compromis.
+    Un keylogger capturerait le mot de passe à la saisie. Un malware
+    avec les droits utilisateur accèderait à history.db et aux fichiers
+    chiffrés. C'est une limite inhérente à toute application de chiffrement
+    desktop : si la machine est compromise, le chiffrement ne protège plus
+    les données en usage. La protection s'applique aux données au repos
+    (fichiers .crypt stockés/transportés), pas à un endpoint actif infecté.
+
+Q : Attaque MITM ou réseau ?
+R : Sans objet. L'application est 100 % offline. Il n'y a aucune
+    communication réseau, donc aucune surface d'attaque réseau.
+    La confidentialité des fichiers .crypt transportés sur un réseau
+    (email, cloud, clé USB) est assurée par le chiffrement AES-256-GCM.
+
+Q : Utilisateur malveillant mais authentifié ?
+R : Partiellement protégé. Les mesures en place :
+    - validate_path() empêche les attaques de type Path Traversal
+      (injection de "../" dans les chemins de fichiers).
+    - Les entrées de chemin sont normalisées et vérifiées avant toute
+      opération de lecture/écriture.
+    - Les octets nuls dans les chemins sont rejetés.
+    - La vérification de robustesse du mot de passe décourage les mots
+      de passe triviaux (entropie < 50 bits refusée).
+    Limite : un utilisateur authentifié sur la machine peut accéder
+    librement à history.db (métadonnées en clair) et tenter une attaque
+    par dictionnaire sur les fichiers .crypt (limité par les 600 000
+    itérations PBKDF2).
+
+------------------------------------------------------------
+RÉSUMÉ DES POINTS FORTS ET POINTS D'ATTENTION
+------------------------------------------------------------
+
+POINTS FORTS :
+  [+] AES-256-GCM : chiffrement authentifié standard industriel
+  [+] PBKDF2 600 000 itérations : ralentit les attaques par dictionnaire
+  [+] Sel aléatoire par opération : pas de réutilisation de clé
+  [+] Nonce aléatoire 96 bits : unicité cryptographique garantie
+  [+] Aucun stockage de clé ou de mot de passe
+  [+] Aucune communication réseau (surface d'attaque réseau = zéro)
+  [+] validate_path() : protection contre le Path Traversal (OWASP A01)
+  [+] Suppression du fichier source après chiffrement
+  [+] Bibliothèque cryptography (PyCA) : pas d'implémentation maison
+
+POINTS D'ATTENTION :
+  [-] history.db stocke des métadonnées en clair (chemins, SHA-256)
+  [-] Pas de protection mémoire contre le cold boot ou le swap
+  [-] PBKDF2 reste vulnérable aux attaques GPU (Argon2 serait préférable)
+  [-] Pas d'effacement sécurisé (secure wipe) du fichier source avant
+      suppression (os.unlink ne garantit pas l'écrasement des blocs disque)
+  [-] Pas de chiffrement des métadonnées SQLite
+
+============================================================
+  Fin de l'analyse — GuardiaBox v2.2
+============================================================

@@ -13,6 +13,7 @@ Usage :
 L'exécutable sera généré dans : guardiabox/dist/GuardiaBox/GuardiaBox.exe
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -37,6 +38,10 @@ HIDDEN_IMPORTS: list[str] = [
     "PyQt6.QtCore",
     "PyQt6.QtGui",
     "PyQt6.QtWidgets",
+    "storage",
+    "storage.history",
+    "sqlite3",
+    "ui.console",
 ]
 
 # ---------------------------------------------------------------------------
@@ -57,8 +62,9 @@ def build_command() -> list[str]:
     if ICON_PATH and Path(ICON_PATH).exists():
         cmd += ["--icon", ICON_PATH]
 
+    sep = os.pathsep  # ';' sur Windows, ':' sur Linux/macOS
     for src, dst in DATAS:
-        cmd += ["--add-data", f"{src};{dst}"]
+        cmd += ["--add-data", f"{src}{sep}{dst}"]
 
     for module in HIDDEN_IMPORTS:
         cmd += ["--hidden-import", module]

@@ -276,7 +276,40 @@ MainWindow (QMainWindow)
 | **Pulsation du bouton** | Classe `PulseButton(QPushButton)` : quand tous les champs requis sont remplis, un `QTimer` à 700 ms alterne la couleur de bordure pour signaler que le formulaire est prêt. |
 | **Tooltips ⓘ** | Labels `QLabel("ⓘ")` placés à côté des termes techniques (AES-256-GCM, PBKDF2-SHA256, mot de passe). Le survol affiche un `QToolTip` pédagogique multi-lignes. |
 | **Drop-shadow** | `QGraphicsDropShadowEffect` appliqué au `QTabWidget` (rayon 24 px) et aux boutons d'action (rayon 16 px). |
-| **QSS enrichi** | `border-radius: 7–10px` sur inputs et boutons, classe CSS `#action_ready` pour les boutons prêts, classe `#toast` pour la bannière verte. |
+| **QSS enrichi** | `border-radius: 7–10px` sur inputs et boutons, classe CSS `#action_ready` pour les boutons prêts, classes `#toast_success` / `#toast_error` pour les bannières. |
+
+### Améliorations UX v2.2
+
+| Fonctionnalité | Implémentation |
+|---|---|
+| **Toast d'erreur** | `ToastNotification` accepte un paramètre `kind` (`"success"` → fond vert, `"error"` → fond rouge `#3a1e1e`). Les `QMessageBox` bloquantes ont été supprimées : toutes les erreurs de validation et d'opération passent désormais par un toast rouge non-bloquant. |
+| **Bouton >_ Terminal** | Bouton stylisé `QPushButton#terminal_btn` dans l'en-tête. Au clic, `subprocess.Popen` ouvre `cmd.exe /K cd /d <projet>` (Windows), `Terminal.app` (macOS), ou un émulateur X11 (Linux) directement positionné dans `guardiabox/`. L'application principale n'est pas bloquée. |
+
+### Usage du Terminal Expert (utilisateurs avancés)
+
+Le bouton **>_ Terminal** situé en haut à droite de la fenêtre ouvre un terminal système
+pré-positionné dans le répertoire `guardiabox/` du projet.
+
+Exemples d'utilisation directe depuis ce terminal :
+
+```bash
+# Lancer les tests unitaires
+python -m pytest tests/ -v
+
+# Lancer l'application en mode console
+python main.py --console
+
+# Consulter l'historique des opérations (SQLite)
+python -c "from storage.history import get_history; [print(r) for r in get_history(10)]"
+
+# Commandes Git courantes
+git status
+git log --oneline -10
+git push origin Gab
+```
+
+> **Note sécurité** : le terminal s'ouvre avec les permissions de l'utilisateur courant.
+> Aucune élévation de privilèges n'est effectuée par l'application.
 
 ### Sécurité GUI
 

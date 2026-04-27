@@ -19,6 +19,7 @@ from fileio.file_handler import (
 )
 from security.crypto import decrypt_data, encrypt_data
 from security.password import check_password_strength
+from storage.history import record_operation, sha256_of
 
 # Extensions utilisées pour les fichiers chiffrés et déchiffrés
 ENCRYPTED_EXT: str = ".crypt"
@@ -192,6 +193,10 @@ def encrypt_flow() -> None:
         encrypted = encrypt_data(data, password)
     except Exception as exc:
         print(f"Erreur lors du chiffrement : {exc}")
+        try:
+            record_operation("CHIFFREMENT", source_file, "", sha256_of(data), "ERREUR", str(exc))
+        except Exception:
+            pass
         return
 
     output_path = source_file + ENCRYPTED_EXT
@@ -199,9 +204,17 @@ def encrypt_flow() -> None:
         write_file_bytes(output_path, encrypted)
     except (ValueError, OSError) as exc:
         print(f"Impossible d'écrire le fichier chiffré : {exc}")
+        try:
+            record_operation("CHIFFREMENT", source_file, output_path, sha256_of(data), "ERREUR", str(exc))
+        except Exception:
+            pass
         return
 
     print(f"\n✓ Fichier chiffré avec succès : '{output_path}'")
+    try:
+        record_operation("CHIFFREMENT", source_file, output_path, sha256_of(data), "SUCCES")
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -236,12 +249,24 @@ def decrypt_flow() -> None:
         print(
             "\n✗ Échec du déchiffrement : mot de passe incorrect ou fichier corrompu."
         )
+        try:
+            record_operation("DECHIFFREMENT", file_path, "", sha256_of(encrypted_data), "ERREUR", "InvalidTag : mot de passe incorrect ou fichier corrompu")
+        except Exception:
+            pass
         return
     except ValueError as exc:
         print(f"\n✗ Données invalides : {exc}")
+        try:
+            record_operation("DECHIFFREMENT", file_path, "", sha256_of(encrypted_data), "ERREUR", str(exc))
+        except Exception:
+            pass
         return
     except Exception as exc:
         print(f"\n✗ Erreur inattendue lors du déchiffrement : {exc}")
+        try:
+            record_operation("DECHIFFREMENT", file_path, "", sha256_of(encrypted_data), "ERREUR", str(exc))
+        except Exception:
+            pass
         return
 
     # --- Détermination du chemin de sortie ---
@@ -262,8 +287,16 @@ def decrypt_flow() -> None:
     try:
         write_file_bytes(output_path, decrypted)
         print(f"\n✓ Fichier déchiffré sauvegardé : '{output_path}'")
+        try:
+            record_operation("DECHIFFREMENT", file_path, output_path, sha256_of(encrypted_data), "SUCCES")
+        except Exception:
+            pass
     except (ValueError, OSError) as exc:
         print(f"Impossible de sauvegarder le fichier déchiffré : {exc}")
+        try:
+            record_operation("DECHIFFREMENT", file_path, output_path, sha256_of(encrypted_data), "ERREUR", str(exc))
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
